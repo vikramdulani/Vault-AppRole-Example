@@ -22,7 +22,7 @@
 
   - name: copy repo
     copy:
-      src: '/home/jenkins/workspace/appRole_Demo_pipe/demoapp'
+      src: '/home/jenkins/workspace/appRole_Demo_pipe/demoapp/'
       dest: /home/{{ ansible_ssh_user }}/{{ app_name }}
 
   - name: Set RoleID as OS environment variable

@@ -1,0 +1,102 @@
+# Ansible playbook for deploying a Flask app
+
+---
+# Install system apt packages
+- hosts: webservers
+  vars:
+    RoleName: "{{ RoleName }}"
+    RoleID: "{{ RoleID }}"
+  tasks:
+  - name: install packages
+    become: yes
+    apt:
+      pkg: '{{item}}'
+      state: installed
+      update_cache: yes
+      cache_valid_time: 3600
+    with_items:
+      - python-pip
+      - nginx
+      - git
+      - ufw
+
+  - name: copy repo
+    copy:
+      src: '/home/jenkins/workspace/appRole_Demo_pipe/demoapp'
+      dest: /home/{{ ansible_ssh_user }}/{{ app_name }}
+
+  - name: Set RoleID as OS environment variable
+    become: yes
+    lineinfile:
+      dest: /home/{{ ansible_ssh_user }}/{{ app_name }}/.env
+      line: 'RoleID={{RoleID}}'
+      regexp: '^RoleID'
+      state: present
+
+  - name: Get Wrapped Secret ID from Vault
+    become: yes
+    uri:
+      url: http://172.20.20.10:8200/v1/auth/approle/role/{{RoleName}}/secret-id
+      method: POST
+      status_code: 200
+      headers:
+        X-Vault-Token: 6afd663d-375c-a761-a419-fab0bff26ef9
+        x-vault-wrap-ttl: 60
+    register: WSID
+
+  - name: Set WSID as OS environment variable
+    become: yes
+    lineinfile:
+      dest: /home/{{ ansible_ssh_user }}/{{ app_name }}/.env
+      line: 'WSID={{WSID.json.wrap_info.token}}'
+      regexp: '^WSID'
+      state: present
+
+  - name: Install virtualenv via pip
+    become: yes
+    pip:
+      name: virtualenv
+      state: latest
+
+  - name: install modules in a virtualenv
+    pip:
+      requirements: /home/{{ ansible_ssh_user }}/{{ app_name }}/requirements.txt
+      virtualenv: /home/{{ ansible_ssh_user }}/{{ app_name }}/venv
+
+  - name: ensure gunicorn daemon is started
+    command: /home/{{ ansible_ssh_user }}/{{ app_name }}/venv/bin/gunicorn wsgi:app -p {{ app_name }}.pid -D
+    args:
+      chdir: /home/{{ ansible_ssh_user }}/{{ app_name }}
+
+  - name: template nginx site config
+    become: yes
+    template:
+      src: .nginx
+      dest: /etc/nginx/sites-available/{{ app_name }}
+
+  - name: remove default nginx site config
+    become: yes
+    file:
+      path: /etc/nginx/sites-enabled/default
+      state: absent
+
+  - name: enable nginx site
+    become: yes
+    file:
+      src: /etc/nginx/sites-available/{{ app_name }}
+      dest: /etc/nginx/sites-enabled/default
+      state: link
+      force: yes
+
+  - name: restart nginx
+    become: yes
+    systemd:
+      name: nginx
+      state: restarted
+      enabled: yes
+
+  - name: open firewall for nginx
+    become: yes
+    ufw:
+      rule: allow
+      name: Nginx Full
